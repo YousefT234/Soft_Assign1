@@ -10,86 +10,10 @@ struct CVRPInstance {
     int n = 0;
     int capacity = 0;
     int vehicles = 0;
-    vector<double> x, y;
     vector<int> demand;
     vector<vector<double>> dist;
-    bool has_coords = true;
-
-    void build_distances(bool round_to_int) {
-        int m = n + 1;
-        dist.assign(m, vector<double>(m, 0.0));
-        for (int i = 0; i < m; ++i)
-            for (int j = 0; j < m; ++j) {
-                double d = hypot(x[i] - x[j], y[i] - y[j]);
-                dist[i][j] = round_to_int ? floor(d + 0.5) : d;
-            }
-    }
 
     int total_demand() const { return accumulate(demand.begin(), demand.end(), 0); }
-
-    // reads the usual CVRPLIB .vrp format
-    static CVRPInstance from_file(const string& path, int vehicles_override = 0) {
-        ifstream in(path);
-        if (!in) throw runtime_error("cannot open instance file: " + path);
-
-        CVRPInstance I;
-        bool round_dist = false;
-        int dimension = 0;
-        string line, section;
-        vector<array<double, 3>> coords;
-        vector<pair<int, int>> dem;
-
-        while (getline(in, line)) {
-            while (!line.empty() && isspace((unsigned char)line.back())) line.pop_back();
-            size_t s = 0;
-            while (s < line.size() && isspace((unsigned char)line[s])) ++s;
-            line = line.substr(s);
-            if (line.empty() || line == "EOF") continue;
-
-            auto colon = line.find(':');
-            bool is_header = isalpha((unsigned char)line[0]);
-            if (is_header && colon != string::npos) {
-                string key = line.substr(0, colon), val = line.substr(colon + 1);
-                while (!key.empty() && isspace((unsigned char)key.back())) key.pop_back();
-                while (!val.empty() && isspace((unsigned char)val[0])) val.erase(val.begin());
-                section.clear();
-                if (key == "NAME") I.name = val;
-                else if (key == "CAPACITY") I.capacity = stoi(val);
-                else if (key == "DIMENSION") dimension = stoi(val);
-                else if (key == "EDGE_WEIGHT_TYPE") round_dist = (val == "EUC_2D");
-                continue;
-            }
-            if (is_header) { section = line; continue; }
-
-            istringstream ss(line);
-            if (section == "NODE_COORD_SECTION") {
-                double id, a, b;
-                if (ss >> id >> a >> b) coords.push_back({id, a, b});
-            } else if (section == "DEMAND_SECTION") {
-                int id, d;
-                if (ss >> id >> d) dem.push_back({id, d});
-            }
-        }
-        if (dimension == 0) dimension = (int)coords.size();
-        if ((int)coords.size() != dimension || (int)dem.size() != dimension)
-            throw runtime_error("malformed instance file (dimension mismatch)");
-
-        I.n = dimension - 1;
-        I.x.resize(dimension); I.y.resize(dimension); I.demand.assign(dimension, 0);
-        for (int i = 0; i < dimension; ++i) { I.x[i] = coords[i][1]; I.y[i] = coords[i][2]; }
-        for (int i = 0; i < dimension; ++i) I.demand[i] = dem[i].second;
-        I.demand[0] = 0;
-        I.build_distances(round_dist);
-
-        if (vehicles_override > 0) I.vehicles = vehicles_override;
-        else {
-            auto k = I.name.rfind("-k");
-            if (k != string::npos && isdigit((unsigned char)I.name[k + 2])) I.vehicles = stoi(I.name.substr(k + 2));
-            else I.vehicles = (I.total_demand() + I.capacity - 1) / I.capacity + 1;
-        }
-        return I;
-    }
-
 
     // the example from the OR-Tools CVRP page: 16 customers, 4 vehicles, capacity 15
     static CVRPInstance ortools_example() {
@@ -98,9 +22,6 @@ struct CVRPInstance {
         I.n = 16;
         I.capacity = 15;
         I.vehicles = 4;
-        I.has_coords = false;
-        I.x.assign(17, 0.0);
-        I.y.assign(17, 0.0);
         I.demand = {0, 1, 1, 2, 4, 2, 4, 8, 8, 1, 2, 1, 2, 4, 4, 8, 8};
         const int m[17][17] = {
             {0, 548, 776, 696, 582, 274, 502, 194, 308, 194, 536, 502, 388, 354, 468, 776, 662},
@@ -125,21 +46,6 @@ struct CVRPInstance {
             for (int j = 0; j < 17; ++j) I.dist[i][j] = m[i][j];
         return I;
     }
-
-    // random instance, used when no file is given
-    static CVRPInstance generate(int n, unsigned seed, int capacity, int vehicles) {
-        CVRPInstance I;
-        I.name = "random-n" + to_string(n) + "-s" + to_string(seed);
-        I.n = n; I.capacity = capacity;
-        mt19937 g(seed);
-        uniform_int_distribution<int> coord(0, 100), dm(1, 30);
-        I.x.assign(n + 1, 0); I.y.assign(n + 1, 0); I.demand.assign(n + 1, 0);
-        I.x[0] = 50; I.y[0] = 50;
-        for (int i = 1; i <= n; ++i) { I.x[i] = coord(g); I.y[i] = coord(g); I.demand[i] = dm(g); }
-        I.vehicles = vehicles > 0 ? vehicles : (I.total_demand() + capacity - 1) / capacity + 1;
-        I.build_distances(false);
-        return I;
-    }
 };
 
 // The chromosome is a permutation of the customers. decode() splits it into
@@ -152,10 +58,7 @@ public:
         int excess_vehicles = 0;
     };
 
-    explicit CVRPProblem(const CVRPInstance& inst) : I(inst) {
-        angle.assign(I.n + 1, 0.0);
-        for (int i = 1; i <= I.n; ++i) angle[i] = atan2(I.y[i] - I.y[0], I.x[i] - I.x[0]);
-    }
+    explicit CVRPProblem(const CVRPInstance& inst) : I(inst) {}
 
     Decoded decode(const vector<int>& perm) const {
         if (cache_valid && perm == cache_key) return cache_val;
@@ -190,11 +93,7 @@ public:
         vector<int> tour(length);
         iota(tour.begin(), tour.end(), 1);
         double u = uniform_real_distribution<double>(0, 1)(rng);
-        if (u < 0.15 && I.has_coords) {
-            sort(tour.begin(), tour.end(), [&](int a, int b) { return angle[a] < angle[b]; });
-            rotate(tour.begin(), tour.begin() + (rng() % length), tour.end());
-            if (rng() % 2) reverse(tour.begin(), tour.end());
-        } else if (u >= 0.15 && u < 0.35) {
+        if (u < 0.2) {
             vector<int> left = tour; tour.clear();
             int cur = 0;
             while (!left.empty()) {
@@ -216,7 +115,6 @@ public:
 
 private:
     const CVRPInstance& I;
-    vector<double> angle;
     mutable vector<int> cache_key;
     mutable Decoded cache_val;
     mutable bool cache_valid = false;

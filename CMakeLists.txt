@@ -7,4 +7,3 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 add_executable(Soft_Assign1 main.cpp)
-add_executable(test_cvrp test_cvrp.cpp)

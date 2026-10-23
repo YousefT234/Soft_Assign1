@@ -11,9 +11,8 @@ using namespace std;
 #include "CVRP.h"
 
 // Solves CVRP using the GA toolbox.
-// Usage: Soft_Assign1 [file.vrp] [--vehicles K] [--pop N] [--gens G] [--runs R] [--pc x] [--pm x] [--tournament T]
+// Usage: Soft_Assign1 [--vehicles K] [--pop N] [--gens G] [--runs R] [--pc x] [--pm x] [--tournament T]
 int main(int argc, char** argv) {
-    string file;
     int vehicles = 0, runs = 5, tournament = 5;
     bool verbose = false;
     GAParameters params;
@@ -36,11 +35,10 @@ int main(int argc, char** argv) {
         else if (a == "--pm") params.mutation_rate = stod(next());
         else if (a == "--tournament") tournament = stoi(next());
         else if (a == "--verbose") verbose = true;
-        else file = a;
     }
 
-    CVRPInstance inst = file.empty() ? CVRPInstance::ortools_example()
-                                     : CVRPInstance::from_file(file, vehicles);
+    CVRPInstance inst = CVRPInstance::ortools_example();
+    if (vehicles > 0) inst.vehicles = vehicles;
     CVRPProblem problem(inst);
     params.chromosome_length = inst.n;
 
