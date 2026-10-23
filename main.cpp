@@ -8,124 +8,98 @@ using namespace std;
 #include "Mutation.h"
 #include "Replacement.h"
 #include "GeneticAlgorithm.h"
+#include "CVRP.h"
 
-int main() {
-    {
-        cout << "=== Running Binary Optimization (OneMax) ===" << "\n";
-        GAParameters params;
-        params.pop_size = 40;
-        params.chromosome_length = 30;
-        params.max_generations = 50;
-        params.crossover_rate = 0.85;
-        params.mutation_rate = 0.02;
-        params.elitism_count = 2;
-        params.opt_type = OptimizationType::MAXIMIZE;
+// Solves CVRP using the GA toolbox.
+// Usage: Soft_Assign1 [file.vrp] [--vehicles K] [--pop N] [--gens G] [--runs R] [--pc x] [--pm x] [--tournament T]
+int main(int argc, char** argv) {
+    string file;
+    int vehicles = 0, runs = 5, tournament = 5;
+    bool verbose = false;
+    GAParameters params;
+    params.pop_size = 100;
+    params.max_generations = 3000;
+    params.crossover_rate = 0.9;
+    params.mutation_rate = 0.3;
+    params.elitism_count = 2;
+    params.penalty_factor = 1000.0;
+    params.opt_type = OptimizationType::MINIMIZE;
 
-        auto fitness = [](const vector<int>& genes) {
-            return static_cast<double>(accumulate(genes.begin(), genes.end(), 0));
-        };
-
-        auto feasibility = [](const vector<int>&) {
-            return true;
-        };
-
-        auto init = [](int length, mt19937& rng) {
-            uniform_int_distribution<int> dist(0, 1);
-            vector<int> genes(length);
-            for (auto& g : genes) g = dist(rng);
-            return genes;
-        };
-
-        GeneticAlgorithm<int> ga(params, fitness, feasibility, init);
-        ga.set_selection(make_shared<TournamentSelection<int>>(3));
-        ga.set_crossover(make_shared<MultiPointCrossover<int>>(2));
-        ga.set_mutation(make_shared<BitFlipMutation<int>>([](const int& v, mt19937&) { return 1 - v; }));
-        ga.set_replacement(make_shared<ElitistGenerationalReplacement<int>>(2));
-
-        ga.run(true);
-        cout << "Binary Best Raw Score: " << ga.get_best_solution().raw_fitness << "\n\n";
+    for (int i = 1; i < argc; ++i) {
+        string a = argv[i];
+        auto next = [&]() { return string(argv[++i]); };
+        if (a == "--vehicles") vehicles = stoi(next());
+        else if (a == "--pop") params.pop_size = stoi(next());
+        else if (a == "--gens") params.max_generations = stoi(next());
+        else if (a == "--runs") runs = stoi(next());
+        else if (a == "--pc") params.crossover_rate = stod(next());
+        else if (a == "--pm") params.mutation_rate = stod(next());
+        else if (a == "--tournament") tournament = stoi(next());
+        else if (a == "--verbose") verbose = true;
+        else file = a;
     }
 
-    {
-        cout << "=== Running Integer Permutation Optimization (Order Crossover & Swap) ===" << "\n";
-        int n = 10;
-        GAParameters params;
-        params.pop_size = 50;
-        params.chromosome_length = n;
-        params.max_generations = 100;
-        params.crossover_rate = 0.9;
-        params.mutation_rate = 0.2;
-        params.opt_type = OptimizationType::MINIMIZE;
+    CVRPInstance inst = file.empty() ? CVRPInstance::ortools_example()
+                                     : CVRPInstance::from_file(file, vehicles);
+    CVRPProblem problem(inst);
+    params.chromosome_length = inst.n;
 
-        auto fitness = [](const vector<int>& genes) {
-            double cost = 0.0;
-            for (int i = 0; i < static_cast<int>(genes.size()); ++i) {
-                cost += abs(genes[i] - i);
-            }
-            return cost;
-        };
+    cout << "Instance: " << inst.name << " | customers: " << inst.n << " | capacity: " << inst.capacity
+         << " | vehicles: " << inst.vehicles << " | total demand: " << inst.total_demand() << "\n";
+    cout << "GA: pop=" << params.pop_size << " gens=" << params.max_generations << " pc=" << params.crossover_rate
+         << " pm=" << params.mutation_rate << " tournament=" << tournament << " runs=" << runs << "\n\n";
 
-        auto feasibility = [](const vector<int>& genes) {
-            unordered_set<int> seen(genes.begin(), genes.end());
-            return seen.size() == genes.size();
-        };
+    Individual<int> best;
+    bool have_best = false;
+    double total_time = 0;
 
-        auto init = [](int length, mt19937& rng) {
-            vector<int> genes(length);
-            iota(genes.begin(), genes.end(), 0);
-            shuffle(genes.begin(), genes.end(), rng);
-            return genes;
-        };
+    for (int r = 0; r < runs; ++r) {
+        auto fitness     = [&](const vector<int>& g) { return problem.fitness(g); };
+        auto feasibility = [&](const vector<int>& g) { return problem.is_feasible(g); };
+        auto init        = [&](int len, mt19937& rng) { return problem.init(len, rng); };
 
         GeneticAlgorithm<int> ga(params, fitness, feasibility, init);
-        ga.set_selection(make_shared<RouletteWheelSelection<int>>());
+        ga.set_selection(make_shared<TournamentSelection<int>>(tournament));
         ga.set_crossover(make_shared<OrderCrossover<int>>());
-        ga.set_mutation(make_shared<SwapMutation<int>>());
-        ga.set_replacement(make_shared<SteadyStateReplacement<int>>());
+        ga.set_mutation(make_shared<RandomChoiceMutation<int>>(vector<shared_ptr<IMutation<int>>>{
+            make_shared<SwapMutation<int>>(), make_shared<InversionMutation<int>>()}));
+        ga.set_replacement(make_shared<ElitistGenerationalReplacement<int>>(params.elitism_count));
 
-        ga.run(true);
-        cout << "Integer Permutation Best Distance to Sorted: " << ga.get_best_solution().raw_fitness << "\n\n";
+        auto t0 = chrono::steady_clock::now();
+        ga.run(verbose);
+        double secs = chrono::duration<double>(chrono::steady_clock::now() - t0).count();
+        total_time += secs;
+
+        Individual<int> res = ga.get_best_solution();
+        cout << "Run " << (r + 1) << ": cost = " << fixed << setprecision(2) << res.raw_fitness
+             << " | feasible: " << (res.is_feasible ? "yes" : "no") << " | " << setprecision(2) << secs << " s\n";
+        if (!have_best || res.fitness < best.fitness) { best = res; have_best = true; }
     }
 
-    {
-        cout << "=== Running Floating-Point Optimization (Sphere Function) ===" << "\n";
-        GAParameters params;
-        params.pop_size = 60;
-        params.chromosome_length = 5;
-        params.max_generations = 80;
-        params.crossover_rate = 0.8;
-        params.mutation_rate = 0.1;
-        params.opt_type = OptimizationType::MINIMIZE;
+    auto d = problem.decode(best.genes);
+    auto num = [](double v) {
+        ostringstream os;
+        if (fabs(v - round(v)) < 1e-9) os << (long long)round(v);
+        else os << fixed << setprecision(2) << v;
+        return os.str();
+    };
 
-        auto fitness = [](const vector<double>& genes) {
-            double sum = 0.0;
-            for (double x : genes) sum += x * x;
-            return sum;
-        };
-
-        auto feasibility = [](const vector<double>& genes) {
-            for (double x : genes) {
-                if (x < -5.12 || x > 5.12) return false;
-            }
-            return true;
-        };
-
-        auto init = [](int length, mt19937& rng) {
-            uniform_real_distribution<double> dist(-5.12, 5.12);
-            vector<double> genes(length);
-            for (auto& g : genes) g = dist(rng);
-            return genes;
-        };
-
-        GeneticAlgorithm<double> ga(params, fitness, feasibility, init);
-        ga.set_selection(make_shared<TournamentSelection<double>>(2));
-        ga.set_crossover(make_shared<MultiPointCrossover<double>>(1));
-        ga.set_mutation(make_shared<UniformFPMutation<double>>(-5.12, 5.12));
-        ga.set_replacement(make_shared<ElitistGenerationalReplacement<double>>(2));
-
-        ga.run(true);
-        cout << "Floating Point Best Sphere Cost: " << ga.get_best_solution().raw_fitness << "\n";
+    cout << "\nObjective: " << num(d.cost) << "\n";
+    long long total_load = 0;
+    for (size_t i = 0; i < d.routes.size(); ++i) {
+        cout << "Route for vehicle " << i << ":\n 0 Load(0)";
+        long long load = 0;
+        for (int c : d.routes[i]) {
+            cout << " ->  " << c << " Load(" << load << ")";
+            load += inst.demand[c];
+        }
+        cout << " ->  0 Load(" << load << ")\n";
+        cout << "Distance of the route: " << num(problem.route_cost({d.routes[i]})) << "m\n";
+        cout << "Load of the route: " << load << "\n\n";
+        total_load += load;
     }
-
-    return 0;
+    cout << "Total Distance of all routes: " << num(d.cost) << "m\n";
+    cout << "Total Load of all routes: " << total_load << "\n";
+    cout << "Feasible: " << (best.is_feasible ? "yes" : "NO") << "\n";
+    return best.is_feasible ? 0 : 1;
 }
