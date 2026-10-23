@@ -10,11 +10,23 @@ using namespace std;
 #include "GeneticAlgorithm.h"
 #include "CVRP.h"
 
-// Solves CVRP using the GA toolbox.
-// Usage: Soft_Assign1 [--vehicles K] [--pop N] [--gens G] [--runs R] [--pc x] [--pm x] [--tournament T]
-int main(int argc, char** argv) {
-    int vehicles = 0, runs = 5, tournament = 5;
-    bool verbose = false;
+// reads one value from the user, pressing Enter keeps the default
+template <typename T>
+T ask(const string& text, T default_value) {
+    cout << text << " [default " << default_value << "]: ";
+    string line;
+    if (!getline(cin, line) || line.empty()) return default_value;
+    istringstream ss(line);
+    T value;
+    if (ss >> value) return value;
+    cout << "  not a valid number, using the default\n";
+    return default_value;
+}
+
+int main() {
+    cout << "Capacitated Vehicle Routing Problem solved with the GA toolbox\n";
+    cout << "Enter the GA settings below, or press Enter to keep the default.\n\n";
+
     GAParameters params;
     params.pop_size = 100;
     params.max_generations = 3000;
@@ -23,19 +35,17 @@ int main(int argc, char** argv) {
     params.elitism_count = 2;
     params.penalty_factor = 1000.0;
     params.opt_type = OptimizationType::MINIMIZE;
+    int tournament = 5, runs = 5, vehicles = 0;
+    bool verbose = false;
 
-    for (int i = 1; i < argc; ++i) {
-        string a = argv[i];
-        auto next = [&]() { return string(argv[++i]); };
-        if (a == "--vehicles") vehicles = stoi(next());
-        else if (a == "--pop") params.pop_size = stoi(next());
-        else if (a == "--gens") params.max_generations = stoi(next());
-        else if (a == "--runs") runs = stoi(next());
-        else if (a == "--pc") params.crossover_rate = stod(next());
-        else if (a == "--pm") params.mutation_rate = stod(next());
-        else if (a == "--tournament") tournament = stoi(next());
-        else if (a == "--verbose") verbose = true;
-    }
+    params.pop_size = ask("Population size", params.pop_size);
+    params.max_generations = ask("Number of generations", params.max_generations);
+    params.crossover_rate = ask("Crossover rate (0 to 1)", params.crossover_rate);
+    params.mutation_rate = ask("Mutation rate (0 to 1)", params.mutation_rate);
+    tournament = ask("Tournament size", tournament);
+    runs = ask("Number of runs (best one is shown)", runs);
+    vehicles = ask("Number of vehicles (0 = use the instance's 4)", vehicles);
+    cout << "\n";
 
     CVRPInstance inst = CVRPInstance::ortools_example();
     if (vehicles > 0) inst.vehicles = vehicles;
